@@ -1,0 +1,9 @@
+---
+StackName: dea-rom-nonprod-${AWS_ACCOUNT}
+parameters:
+  - KeyName: aai-ssm-workstation
+  - InstanceType: t2.small
+  - SSHLocation: 119.18.0.198/32
+  - LatestAmiId: ami-059af0b76ba105e7e
+tags:
+  - user: tester
