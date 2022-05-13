@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Metadata:
+  License: Apache-2.0
+Description: 'AWS Glue test stack'
+Parameters:
+  LandingZoneBucketName:
+    Description: Name of the landing zone S3 bucket
+    Type: String
+  LandingZoneBucketArn:
+    Description: ARN of the landing zone S3 bucket
+    Type: String
+  LandingZoneDBName:
+    Description: Name of the Landing Zone Database
+    Type: String
+  LandingZoneDBDescription:
+    Description: Description of the Landing Zone Database
+    Type: String
+  LandingZoneLocationUri:
+    Description: URI of the Landing Zone Database
+    Type: String
+  LandingZoneCrawlerName:
+    Description: Name of the LandingZone Crawler
+    Type: String
+  LandingZoneCrawlerS3TargetPath:
+    Description: Target path of the Landing Zone Crawler
+    Type: String
+    
+    
+Resources:
+  CrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        ['arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole']
+      Policies:
+        -
+          PolicyName: "S3BucketAccessPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action: 
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                Resource: 
+                  !Join
+                    - ''
+                    - - !Ref LandingZoneBucketArn
+                      - "*"
+ 
+  LandingZoneDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref LandingZoneDBName
+        Description: !Ref LandingZoneDBDescription
+        LocationUri: !Ref LandingZoneLocationUri
+#        Parameters:
+#          key1 : "value1"
+#          key2 : "value2"
+ 
+#  LandingZoneClassifier:
+#    Type: AWS::Glue::Classifier
+#    Properties:
+#      GrokClassifier:
+#        Name: "CrawlerClassifier"
+#        Classification: "wikiData"
+#        GrokPattern: "%{NOTSPACE:language} %{NOTSPACE:page_title} %{NUMBER:hits:long} %{NUMBER:retrieved_size:long}"
+ 
+  LandingZoneCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Ref LandingZoneCrawlerName
+      Role: !GetAtt CrawlerRole.Arn
+      DatabaseName: !Ref LandingZoneDatabase
+#      Classifiers:
+#        - !Ref LandingZoneClassifier
+      Targets:
+        S3Targets:
+          - Path: !Ref LandingZoneCrawlerS3TargetPath
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+#      Tags:
+#        "Key1": "Value1"
+      Schedule:
+        ScheduleExpression: "cron(0/10 * ? * MON-FRI *)"

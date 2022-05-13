@@ -5,6 +5,7 @@ from os.path import exists
 import yaml
 from pathlib import Path
 import time
+from tabulate import tabulate
 
 
 client = boto3.client('cloudformation')
@@ -14,8 +15,10 @@ def main():
     ## parser and arguments
     parser = argparse.ArgumentParser(description="Managing AWS Cloudformation stacks.")
     parser.add_argument('-o', '--operation', required=True,help="Operation to perform. create or delete")
+    parser.add_argument('-a', '--action', required=True,help="Operation to perform. plan or apply")
     parser.add_argument('-t', '--template',  required=True,help="Cloudformation template to operate")
     parser.add_argument('-v', '--variables',  required=True,help="YAML file holding cfn template variables")
+    parser.add_argument('-c', '--changeset',  required=False,help="If creating a changeset not deployment straight, you can specify changeset name here")
     args = parser.parse_args()
 
 
@@ -28,6 +31,20 @@ def main():
     else:
         print("Invalid option -o. Use 'create' or 'delete'")
         exit(1)
+
+    # action
+    if (args.operation == 'create' and args.action == 'plan'):
+        action = 'plan'
+    elif (args.operation == 'create' and args.action == 'apply'):
+        action = 'apply'
+    else:
+        print("Invalid option -a. Only specify when --operation is 'create'. Valid values are 'plan' or 'apply'")
+        exit(1)
+
+    # changeset name
+    changeset = None
+    if (args.changeset != None and args.changeset != ''):
+        changeset = args.changeset
 
     # template
     if (exists(args.template)):
@@ -56,12 +73,13 @@ def main():
             })
 
     tags = []
-    for idx in range(len(vars['tags'])):
-        for key in vars['tags'][idx]:
-            tags.append({
-                'Key': key,
-                'Value': vars['tags'][idx][key]
-            })
+    if 'tags' in vars:
+        for idx in range(len(vars['tags'])):
+            for key in vars['tags'][idx]:
+                tags.append({
+                    'Key': key,
+                    'Value': vars['tags'][idx][key]
+                })
 
     stack_name = vars['StackName']
     status = get_stack_status(stack_name)
@@ -85,76 +103,118 @@ def main():
                 'IMPORT_ROLLBACK_FAILED',
                 'IMPORT_ROLLBACK_COMPLETE'
             ], [])
-            sleep(5)
+            time.sleep(5)
         else:
             break
 
     ## create / update stack
     if (operation == 'create'):
-        # when stack not exists, create
+        # create changeset for new stack
         if (status == False):
-            print('Creating stack ...')
-            response = client.create_stack(
-                StackName = stack_name,
-                TemplateBody = Path(template).read_text(),
-                Parameters = parameters,
-                OnFailure = 'ROLLBACK',
-                Tags = tags
-            )
+            if (action == 'plan'):
+                print(f'Creating changeset {changeset} ...')
+                response = client.create_change_set(
+                    StackName = stack_name,
+                    ChangeSetName = changeset,
+                    TemplateBody = Path(template).read_text(),
+                    Parameters = parameters,
+                    ChangeSetType = 'CREATE',
+                    Tags = tags,
+                    Capabilities=['CAPABILITY_IAM','CAPABILITY_NAMED_IAM','CAPABILITY_AUTO_EXPAND']
+                )
+                describe = client.describe_change_set(
+                    ChangeSetName = changeset,
+                    StackName = stack_name
+                )
+                print_changeset(describe)
 
-            time.sleep(2)
+            if (action == 'apply'):
+                print(f'Applying changeset {changeset} ...')
 
-            if (wait_for_status(stack_name, ['CREATE_COMPLETE'], [
-                    'CREATE_FAILED',
-                    'ROLLBACK_FAILED',
-                    'ROLLBACK_COMPLETE',
-                    'DELETE_FAILED',
-                    'DELETE_COMPLETE',
-                    'UPDATE_COMPLETE',
-                    'UPDATE_FAILED',
-                    'UPDATE_ROLLBACK_FAILED',
-                    'UPDATE_ROLLBACK_COMPLETE',
-                    'IMPORT_COMPLETE',
-                    'IMPORT_ROLLBACK_FAILED',
-                    'IMPORT_ROLLBACK_COMPLETE'
-                ])):
-                print(f'Stack {stack_name} creation SUCCESSFUL!')
-                exit(0)
-            else:
-                print(f'Stack {stack_name} creation FAILED!')
-                exit(1)
+                response = client.execute_change_set(
+                    ChangeSetName = changeset,
+                    StackName = stack_name,
+                    DisableRollback = False
+                )
+
+                time.sleep(2)
+
+                if (wait_for_status(stack_name, ['CREATE_COMPLETE'], [
+                        'CREATE_FAILED',
+                        'ROLLBACK_FAILED',
+                        'ROLLBACK_COMPLETE',
+                        'DELETE_FAILED',
+                        'DELETE_COMPLETE',
+                        'UPDATE_COMPLETE',
+                        'UPDATE_FAILED',
+                        'UPDATE_ROLLBACK_FAILED',
+                        'UPDATE_ROLLBACK_COMPLETE',
+                        'IMPORT_COMPLETE',
+                        'IMPORT_ROLLBACK_FAILED',
+                        'IMPORT_ROLLBACK_COMPLETE'
+                    ])):
+                    print(f'Stack {stack_name} creation SUCCESSFUL!')
+                    exit(0)
+                else:
+                    print(f'Stack {stack_name} creation FAILED!')
+                    exit(1)
     
         # when stack exists, update
         else:
-            print('Updating stack ...')
-            response = client.update_stack(
-                StackName = stack_name,
-                TemplateBody = Path(template).read_text(),
-                Parameters = parameters,
-                Tags = tags
-            )
-    
-            time.sleep(2)
+            # create change set for existing stack (update)
+            if (action == 'plan'):
+                print(f'Creating changeset {changeset} ...')
+                response = client.create_change_set(
+                    StackName = stack_name,
+                    ChangeSetName = changeset,
+                    TemplateBody = Path(template).read_text(),
+                    Parameters = parameters,
+                    ChangeSetType = 'UPDATE',
+                    Tags = tags,
+                    Capabilities=['CAPABILITY_IAM','CAPABILITY_NAMED_IAM','CAPABILITY_AUTO_EXPAND']
+                )
+                while True:
+                    describe = client.describe_change_set(
+                        ChangeSetName = changeset,
+                        StackName = stack_name
+                    )
+                    if describe['Status'] == 'CREATE_PENDING':
+                        print('Wait till creation finishes ...')
+                        time.sleep(5)
+                    else:
+                        break
+                print_changeset(describe)
 
-            if (wait_for_status(stack_name, ['UPDATE_COMPLETE'], [
-                    'CREATE_FAILED',
-                    'CREATE_COMPLETE',
-                    'ROLLBACK_FAILED',
-                    'ROLLBACK_COMPLETE',
-                    'DELETE_FAILED',
-                    'DELETE_COMPLETE',
-                    'UPDATE_FAILED',
-                    'UPDATE_ROLLBACK_FAILED',
-                    'UPDATE_ROLLBACK_COMPLETE',
-                    'IMPORT_COMPLETE',
-                    'IMPORT_ROLLBACK_FAILED',
-                    'IMPORT_ROLLBACK_COMPLETE'
-                ])):
-                print(f'Stack {stack_name} update SUCCESSFUL!')
-                exit(0)
-            else:
-                print(f'Stack {stack_name} update FAILED!')
-                exit(1)
+            if (action == 'apply'):
+                print(f'Applying changeset {changeset} ...')
+
+                response = client.execute_change_set(
+                    ChangeSetName = changeset,
+                    StackName = stack_name,
+                    DisableRollback = False
+                )
+
+                time.sleep(2)
+
+                if (wait_for_status(stack_name, ['UPDATE_COMPLETE'], [
+                        'CREATE_FAILED',
+                        'ROLLBACK_FAILED',
+                        'ROLLBACK_COMPLETE',
+                        'DELETE_FAILED',
+                        'DELETE_COMPLETE',
+                        'UPDATE_COMPLETE',
+                        'UPDATE_FAILED',
+                        'UPDATE_ROLLBACK_FAILED',
+                        'UPDATE_ROLLBACK_COMPLETE',
+                        'IMPORT_COMPLETE',
+                        'IMPORT_ROLLBACK_FAILED',
+                        'IMPORT_ROLLBACK_COMPLETE'
+                    ])):
+                    print(f'Stack {stack_name} update SUCCESSFUL!')
+                    exit(0)
+                else:
+                    print(f'Stack {stack_name} update FAILED!')
+                    exit(1)
                 
     ## delete stack
     if (operation == 'delete'):
@@ -209,7 +269,7 @@ def wait_for_status(stack_name, success_status, failed_status, next_token = None
         idx = 0
         while(True):
             idx = idx +1
-            if (idx > 60):
+            if (idx > 120):
                 print(f'Timeout waiting for Stack {stack_name}')
                 return False
 
@@ -257,6 +317,31 @@ def get_stack_status(stack_name, next_token = None):
     if 'NextToken' in response.keys():
         return get_stack_status(stack_name, response['NextToken'])
 
+def print_changeset(description):
+    print('Description')
+    print('-----------------------')
+    print(f'* StackName:       {description["StackName"]}')
+    print(f'* ChangeSetName:   {description["ChangeSetName"]}')
+    print(f'* ChangeSetId:     {description["ChangeSetId"]}')
+    print(f'* ExecutionStatus: {description["ExecutionStatus"]}')
+    print(f'* Status:          {description["Status"]}')
+    if 'StatusReason' in description:
+        print(f'* StatusReason:    {description["StatusReason"]}')
+    if 'Changes' in description:
+        print('* Changes:')
+        data = []
+        for change in description['Changes']:
+            data.append(
+                [
+                    change['ResourceChange']['Action'],
+                    change['ResourceChange']['LogicalResourceId'],
+                    change['ResourceChange']['PhysicalResourceId'],
+                    change['ResourceChange']['ResourceType'],
+                    change['ResourceChange']['Replacement']
+                ]
+            )
+        print(tabulate(data, headers=['Action', 'Logical ID', 'Physical ID', 'Resource type', 'Replacement']))
+    #print(description)
 
 
 ## entry

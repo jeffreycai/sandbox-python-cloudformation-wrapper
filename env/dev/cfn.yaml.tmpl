@@ -1,0 +1,12 @@
+---
+StackName: aai-hs-glue-test
+parameters:
+  - LandingZoneBucketName: tfnsw-hub-and-spoke-landing-opal-batch-nonprod
+  - LandingZoneBucketArn: arn:aws:s3:::tfnsw-hub-and-spoke-landing-opal-batch-nonprod
+  - LandingZoneDBName: aai-hs-opal-level-1-database
+  - LandingZoneDBDescription: Landing Zone
+  - LandingZoneLocationUri: s3://tfnsw-hub-and-spoke-landing-opal-batch-nonprod
+  - LandingZoneCrawlerName: aai-hs-opal-level-1-crawler
+  - LandingZoneCrawlerS3TargetPath: s3://tfnsw-hub-and-spoke-landing-opal-batch-nonprod/output
+tags:
+  - department: aai
